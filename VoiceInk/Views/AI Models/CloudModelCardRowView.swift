@@ -7,7 +7,7 @@ struct CloudModelCardView: View {
     let isCurrent: Bool
     var setDefaultAction: () -> Void
     
-    @EnvironmentObject private var whisperState: WhisperState
+    @EnvironmentObject private var transcriptionModelManager: TranscriptionModelManager
     @StateObject private var aiService = AIService()
     @State private var isExpanded = false
     @State private var apiKey = ""
@@ -126,12 +126,17 @@ struct CloudModelCardView: View {
                 .font(.system(size: 11))
                 .foregroundColor(Color(.secondaryLabelColor))
                 .lineLimit(1)
-            
-            Label("Cloud Model", systemImage: "icloud")
-                .font(.system(size: 11))
-                .foregroundColor(Color(.secondaryLabelColor))
-                .lineLimit(1)
-            
+
+            // Speed
+            HStack(spacing: 3) {
+                Text("Speed")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(.secondaryLabelColor))
+                progressDotsWithNumber(value: model.speed * 10)
+            }
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+
             // Accuracy
             HStack(spacing: 3) {
                 Text("Accuracy")
@@ -330,8 +335,7 @@ struct CloudModelCardView: View {
         if isCurrent {
             Task {
                 await MainActor.run {
-                    whisperState.currentTranscriptionModel = nil
-                    UserDefaults.standard.removeObject(forKey: "CurrentTranscriptionModel")
+                    transcriptionModelManager.clearCurrentTranscriptionModel()
                 }
             }
         }

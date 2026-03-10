@@ -1,5 +1,8 @@
 import Foundation
 import AppKit
+import os
+
+private let logger = Logger(subsystem: "com.VoiceInk", category: "CursorPaster")
 
 class CursorPaster {
 
@@ -24,15 +27,16 @@ class CursorPaster {
         ClipboardManager.setClipboard(text, transient: shouldRestoreClipboard)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            if UserDefaults.standard.bool(forKey: "UseAppleScriptPaste") {
-                _ = pasteUsingAppleScript()
+            if UserDefaults.standard.bool(forKey: "useAppleScriptPaste") {
+                pasteUsingAppleScript()
             } else {
-                pasteUsingCommandV()
+                pasteFromClipboard()
             }
         }
 
         if shouldRestoreClipboard {
-            let delay = UserDefaults.standard.double(forKey: "clipboardRestoreDelay")
+            let restoreDelay = UserDefaults.standard.double(forKey: "clipboardRestoreDelay")
+            let delay = max(restoreDelay, 0.25)
 
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 if !savedContents.isEmpty {
@@ -44,54 +48,66 @@ class CursorPaster {
             }
         }
     }
-    
-    private static func pasteUsingAppleScript() -> Bool {
-        guard AXIsProcessTrusted() else {
-            return false
-        }
-        
-        let script = """
-        tell application "System Events"
-            keystroke "v" using command down
-        end tell
-        """
-        
+
+    // MARK: - AppleScript paste
+
+    // Pre-compiled once on first use to avoid per-paste overhead.
+    private static let pasteScript: NSAppleScript? = {
+        let script = NSAppleScript(source: """
+            tell application "System Events"
+                keystroke "v" using command down
+            end tell
+            """)
         var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: script) {
-            _ = scriptObject.executeAndReturnError(&error)
-            return error == nil
+        script?.compileAndReturnError(&error)
+        return script
+    }()
+
+    // Paste via AppleScript. Works with custom keyboard layouts (e.g. Neo2) where CGEvent-based paste fails.
+    private static func pasteUsingAppleScript() {
+        var error: NSDictionary?
+        pasteScript?.executeAndReturnError(&error)
+        if let error = error {
+            logger.error("AppleScript paste failed: \(error, privacy: .public)")
         }
-        return false
     }
-    
-    private static func pasteUsingCommandV() {
+
+    // MARK: - CGEvent paste
+
+    // Posts Cmd+V via CGEvent without modifying the active input source.
+    private static func pasteFromClipboard() {
         guard AXIsProcessTrusted() else {
+            logger.error("Accessibility not trusted — cannot paste")
             return
         }
-        
-        let source = CGEventSource(stateID: .hidSystemState)
-        
+
+        let source = CGEventSource(stateID: .privateState)
+
         let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true)
-        let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-        let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
-        
+        let vDown   = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
+        let vUp     = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+        let cmdUp   = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
+
         cmdDown?.flags = .maskCommand
-        vDown?.flags = .maskCommand
-        vUp?.flags = .maskCommand
-        
+        vDown?.flags   = .maskCommand
+        vUp?.flags     = .maskCommand
+
         cmdDown?.post(tap: .cghidEventTap)
         vDown?.post(tap: .cghidEventTap)
         vUp?.post(tap: .cghidEventTap)
         cmdUp?.post(tap: .cghidEventTap)
+
+        logger.notice("CGEvents posted for Cmd+V")
     }
 
-    // Simulate pressing the Return / Enter key
+    // MARK: - Enter key
+
+    // Simulate pressing the Return/Enter key.
     static func pressEnter() {
         guard AXIsProcessTrusted() else { return }
-        let source = CGEventSource(stateID: .hidSystemState)
+        let source = CGEventSource(stateID: .privateState)
         let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true)
-        let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false)
+        let enterUp   = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false)
         enterDown?.post(tap: .cghidEventTap)
         enterUp?.post(tap: .cghidEventTap)
     }

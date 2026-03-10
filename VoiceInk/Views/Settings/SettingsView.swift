@@ -5,10 +5,12 @@ import LaunchAtLogin
 import AVFoundation
 
 struct SettingsView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
     @EnvironmentObject private var menuBarManager: MenuBarManager
     @EnvironmentObject private var hotkeyManager: HotkeyManager
-    @EnvironmentObject private var whisperState: WhisperState
+    @EnvironmentObject private var recorderUIManager: RecorderUIManager
+    @EnvironmentObject private var transcriptionModelManager: TranscriptionModelManager
     @EnvironmentObject private var enhancementService: AIEnhancementService
     @StateObject private var deviceManager = AudioDeviceManager.shared
     @ObservedObject private var soundManager = SoundManager.shared
@@ -18,10 +20,11 @@ struct SettingsView: View {
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
     @AppStorage("enableAnnouncements") private var enableAnnouncements = true
     @AppStorage("restoreClipboardAfterPaste") private var restoreClipboardAfterPaste = true
-    @AppStorage("clipboardRestoreDelay") private var clipboardRestoreDelay = 1.0
+    @AppStorage("clipboardRestoreDelay") private var clipboardRestoreDelay = 2.0
+    @AppStorage("useAppleScriptPaste") private var useAppleScriptPaste = false
     @State private var showResetOnboardingAlert = false
     @State private var currentShortcut = KeyboardShortcuts.getShortcut(for: .toggleMiniRecorder)
-    @State private var isCustomCancelEnabled = false
+    @State private var isCustomCancelEnabled = KeyboardShortcuts.getShortcut(for: .cancelRecorder) != nil
 
     // Expansion states - all collapsed by default
     @State private var isCustomCancelExpanded = false
@@ -165,11 +168,21 @@ struct SettingsView: View {
                     label: "Restore Clipboard After Paste"
                 ) {
                     Picker("Restore Delay", selection: $clipboardRestoreDelay) {
+                        Text("250ms").tag(0.25)
+                        Text("500ms").tag(0.5)
                         Text("1s").tag(1.0)
                         Text("2s").tag(2.0)
                         Text("3s").tag(3.0)
                         Text("4s").tag(4.0)
                         Text("5s").tag(5.0)
+                    }
+                }
+
+                // AppleScript Paste
+                Toggle(isOn: $useAppleScriptPaste) {
+                    HStack(spacing: 4) {
+                        Text("Use AppleScript Paste")
+                        InfoTip("Enable this if pasting doesn't work with your keyboard layout (e.g. Neo2). Uses AppleScript instead of simulated key events.")
                     }
                 }
             }
@@ -179,21 +192,12 @@ struct SettingsView: View {
 
             // MARK: - Interface
             Section("Interface") {
-                Picker("Recorder Style", selection: $whisperState.recorderType) {
+                Picker("Recorder Style", selection: $recorderUIManager.recorderType) {
                     Text("Notch").tag("notch")
                     Text("Mini").tag("mini")
                 }
                 .pickerStyle(.segmented)
 
-                Toggle(isOn: Binding(
-                    get: { UserDefaults.standard.bool(forKey: "UseAppleScriptPaste") },
-                    set: { UserDefaults.standard.set($0, forKey: "UseAppleScriptPaste") }
-                )) {
-                    HStack(spacing: 4) {
-                        Text("AppleScript Paste")
-                        InfoTip("Paste via System Events instead of direct keystrokes. Try this if paste isn't working in some apps.")
-                    }
-                }
             }
 
             // MARK: - Experimental
@@ -240,46 +244,44 @@ struct SettingsView: View {
                 Text("Control how VoiceInk handles your transcription data and audio recordings.")
             }
 
-            // MARK: - Data Management
+            // MARK: - Backup
             Section {
-                LabeledContent {
-                    Button("Import") {
-                        ImportExportService.shared.importSettings(
-                            enhancementService: enhancementService,
-                            whisperPrompt: whisperState.whisperPrompt,
-                            hotkeyManager: hotkeyManager,
-                            menuBarManager: menuBarManager,
-                            mediaController: MediaController.shared,
-                            playbackController: PlaybackController.shared,
-                            soundManager: SoundManager.shared,
-                            whisperState: whisperState
-                        )
-                    }
-                } label: {
-                    Text("Import Settings")
-                }
-
-                LabeledContent {
+                LabeledContent("Export Settings") {
                     Button("Export") {
                         ImportExportService.shared.exportSettings(
                             enhancementService: enhancementService,
-                            whisperPrompt: whisperState.whisperPrompt,
+                            whisperPrompt: WhisperPrompt(),
                             hotkeyManager: hotkeyManager,
                             menuBarManager: menuBarManager,
-                            mediaController: MediaController.shared,
-                            playbackController: PlaybackController.shared,
-                            soundManager: SoundManager.shared,
-                            whisperState: whisperState
+                            mediaController: mediaController,
+                            playbackController: playbackController,
+                            soundManager: soundManager,
+                            recorderUIManager: recorderUIManager,
+                            modelContext: modelContext
                         )
                     }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Export Settings")
-                        InfoTip("Export prompts, power modes, word replacements, shortcuts, and preferences. API keys are never included.")
+                }
+
+                LabeledContent("Import Settings") {
+                    Button("Import") {
+                        ImportExportService.shared.importSettings(
+                            enhancementService: enhancementService,
+                            whisperPrompt: WhisperPrompt(),
+                            hotkeyManager: hotkeyManager,
+                            menuBarManager: menuBarManager,
+                            mediaController: mediaController,
+                            playbackController: playbackController,
+                            soundManager: soundManager,
+                            recorderUIManager: recorderUIManager,
+                            modelContext: modelContext,
+                            transcriptionModelManager: transcriptionModelManager
+                        )
                     }
                 }
             } header: {
-                Text("Data Management")
+                Text("Backup")
+            } footer: {
+                Text("Export or import all your settings, prompts, power modes, dictionary, and custom models.")
             }
 
             // MARK: - Diagnostics
@@ -290,9 +292,6 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .background(Color(NSColor.controlBackgroundColor))
-        .onAppear {
-            isCustomCancelEnabled = KeyboardShortcuts.getShortcut(for: .cancelRecorder) != nil
-        }
         .alert("Reset Onboarding", isPresented: $showResetOnboardingAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Reset", role: .destructive) {
